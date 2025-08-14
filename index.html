@@ -239,21 +239,8 @@ $('#btnJoin').onclick = async ()=>{
 
 // Rejoin disabled — always start fresh in this tab
 
-// Host starts game
-$('#btnStart').onclick = async ()=>{
-  if(!me.isHost) return;
-  const r=ref(db, `rooms/${me.room}`);
-  const playersSnap = await get(child(r,'players')); const players=playersSnap.val()||{}; const order = Object.keys(players); // join order
-  // Init board state
-  const owners = new Array(40).fill(null);
-  const mortgaged = new Array(40).fill(false);
-  const houses = new Array(40).fill(0);
-  const turn = { order, currentIndex:0, current: order[0], rolled:false, dice:[0,0], lastDiceSum:0, extraRoll:false };
-  await update(r, { meta:{ hostId:me.playerId, maxPlayers: Object.keys(players).length, state:'playing', startedAt: serverTimestamp() }, board:{ owners, mortgaged, houses }, turn });
-};
-
 // ==============================
-// GAME: rendering & rules (multiplayer)
+// Game constants / tiles
 // ==============================
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -310,9 +297,41 @@ function tileRect(i){ const L=M,R=SIZE-M,T=M,B=SIZE-M; const brx=R-CORNER, bry=B
 function drawBoardImage(){ const bx=M, by=M, bw=SIZE-2*M, bh=bw; if(!boardReady){ ctx.save(); ctx.fillStyle='#0b1222'; ctx.fillRect(bx,by,bw,bh); ctx.fillStyle='rgba(255,255,255,.65)'; ctx.font='700 20px ui-sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText('Loading board…', SIZE/2, SIZE/2); ctx.restore(); return; } const iw=boardImg.naturalWidth, ih=boardImg.naturalHeight; const ir=iw/ih; const br=bw/bh; let sx=0, sy=0, sw=iw, sh=ih; if(ir>br){ sw=ih*br; sx=(iw-sw)/2; } else if(ir<br){ sh=iw/br; sy=(ih-sh)/2; } const ROT_Q=1; ctx.save(); ctx.translate(bx+bw/2, by+bh/2); ctx.rotate(ROT_Q*Math.PI/2); ctx.drawImage(boardImg, sx,sy,sw,sh, -bw/2, -bh/2, bw, bh); ctx.restore(); }
 function rr(x,y,w,h,r){ const a=Math.min(r,w/2,h/2); ctx.beginPath(); ctx.moveTo(x+a,y); ctx.arcTo(x+w,y,x+w,y+h,a); ctx.arcTo(x+w,y+h,x,y+h,a); ctx.arcTo(x,y+h,x,y,a); ctx.arcTo(x,y,x+w,y,a); ctx.closePath(); }
 
+// ==============================
+// Decks (UK) — definitions in code, order stored in DB
+// ==============================
+function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=(Math.random()*(i+1)|0); [a[i],a[j]]=[a[j],a[i]]; } return a; }
+
+const chanceCards = [
+  {id:'C_ADV_GO', text:'Advance to GO (Collect £200)', act: async(pid)=>{ await moveTo(pid,0,true); }},
+  {id:'C_GO_JAIL', text:'Go to Jail. Go directly to Jail. Do not pass GO, do not collect £200.', act: async(pid)=>{ await goToJail(pid); }},
+  {id:'C_BACK3', text:'Go back 3 spaces.', act: async(pid)=>{ await moveRel(pid,-3); }},
+  {id:'C_NEAR_STN', text:'Advance to the nearest Station. If owned, pay owner twice the rent.', act: async(pid)=>{ await advanceToNearestStation(pid, true); }},
+  {id:'C_NEAR_UTIL', text:'Advance to the nearest Utility. If owned, throw dice and pay 10× the amount thrown.', act: async(pid)=>{ await advanceToNearestUtility(pid); }},
+  {id:'C_BANK_DIV', text:'Bank pays you dividend of £50.', act: async(pid)=>{ await adjustMoney(pid,50); }},
+  {id:'C_REPAIRS', text:'Make general repairs on all your property: For each house pay £25, For each hotel £100.', act: async(pid)=>{ await repairs(pid,25,100); }},
+  {id:'C_ADV_TRAFSQ', text:'Advance to Trafalgar Square. If you pass GO, collect £200.', act: async(pid)=>{ await moveTo(pid,24,true); }},
+  {id:'C_ADV_MAYFAIR', text:'Advance to Mayfair.', act: async(pid)=>{ await moveTo(pid,39,true); }},
+  {id:'C_GET_OUT', text:'Get Out of Jail Free — keep this card until needed.', act: async(pid)=>{ await giveGOOJF(pid,'chance'); }}
+];
+
+const chestCards = [
+  {id:'H_ADV_GO', text:'Advance to GO (Collect £200).', act: async(pid)=>{ await moveTo(pid,0,true); }},
+  {id:'H_BANK_ERR', text:'Bank error in your favour — Collect £200.', act: async(pid)=>{ await adjustMoney(pid,200); }},
+  {id:'H_DOCTOR', text:"Doctor's fees — Pay £50.", act: async(pid)=>{ await adjustMoney(pid,-50); }},
+  {id:'H_STOCK', text:'From sale of stock you get £50.', act: async(pid)=>{ await adjustMoney(pid,50); }},
+  {id:'H_GO_JAIL', text:'Go to Jail. Go directly to jail, do not pass GO, do not collect £200.', act: async(pid)=>{ await goToJail(pid); }},
+  {id:'H_GET_OUT', text:'Get Out of Jail Free — keep this card until needed.', act: async(pid)=>{ await giveGOOJF(pid,'chest'); }},
+  {id:'H_SCHOOL_FEES', text:'Pay school fees of £50.', act: async(pid)=>{ await adjustMoney(pid,-50); }},
+  {id:'H_INCOME_TAX_REFUND', text:'Income tax refund — Collect £20.', act: async(pid)=>{ await adjustMoney(pid,20); }},
+  {id:'H_BIRTHDAY', text:"It is your birthday — Collect £10 from every player.", act: async(pid)=>{ await birthday(pid,10); }}
+];
+
+// ==============================
 // Live game state
-let roomRefs = { root:null, players:null, board:null, turn:null, events:null };
-let game = { players:{}, board:{ owners:[], mortgaged:[], houses:[] }, turn:null };
+// ==============================
+let roomRefs = { root:null, players:null, board:null, turn:null, events:null, decks:null };
+let game = { players:{}, board:{ owners:[], mortgaged:[], houses:[] }, turn:null, decks:{ chance:[], chest:[] } };
 
 async function startGameUI(room){ // switch screens
   $('#screenLobby').classList.add('hidden');
@@ -322,10 +341,12 @@ async function startGameUI(room){ // switch screens
   roomRefs.board = child(roomRefs.root, 'board');
   roomRefs.turn = child(roomRefs.root, 'turn');
   roomRefs.events = child(roomRefs.root, 'events');
+  roomRefs.decks = child(roomRefs.root, 'decks');
 
   onValue(roomRefs.players, snap=>{ game.players = snap.val()||{}; refreshSidebar(); drawBoard(); });
   onValue(roomRefs.board, snap=>{ game.board = snap.val()||{owners:[],mortgaged:[],houses:[]}; drawBoard(); });
   onValue(roomRefs.turn, snap=>{ game.turn = snap.val(); updateTurnUI(); drawBoard(); });
+  onValue(roomRefs.decks, snap=>{ game.decks = snap.val()||{chance:[],chest:[]}; });
   onValue(roomRefs.events, snap=>{ const ev=snap.val(); if(!ev) return; if(ev.type==='card'){ showCard(ev.payload); } });
 
   $('#btnRoll').onclick = onRoll;
@@ -337,129 +358,171 @@ async function startGameUI(room){ // switch screens
 }
 
 function closeCard(){
-  // Hide locally
   document.getElementById('card').style.display = 'none';
-  // Host clears shared event so all clients stop seeing the modal
   if(roomRefs?.events && me?.isHost){ update(roomRefs.events, { type:null, payload:null }); }
 }
 
-function updateTurnUI(){
-  if(!game.turn) return;
-  const pid = game.turn.current || game.turn.order[game.turn.currentIndex];
-  const p = game.players[pid];
-  document.getElementById('turnName').textContent = p? p.name : '-';
-  const isMyTurn = pid===me.playerId;
-  document.getElementById('btnRoll').disabled = !isMyTurn || !!game.turn.rolled;
-  document.getElementById('btnEnd').disabled  = !isMyTurn || !game.turn.rolled; // must roll once
-  document.getElementById('btnBuy').disabled  = true;
-  document.getElementById('diceFace').textContent = `🎲 ${game.turn.dice?.[0]||0}  + ${game.turn.dice?.[1]||0} = ${game.turn.lastDiceSum||0}`; }
+// ==============================
+// Helpers — money, movement, decks
+// ==============================
+function r6(){ return (Math.random()*6|0)+1; }
 
+async function adjustMoney(pid, delta){ const p=game.players[pid]; if(!p) return; await update(child(roomRefs.players,pid), { cash: (p.cash||0)+delta }); }
+
+async function moveTo(pid, dest, collectGo=true){ const p=game.players[pid]; if(!p) return; const cur=p.pos||0; let add=0; if(collectGo && (dest<cur)) add+=200; await update(child(roomRefs.players,pid), { pos: dest }); if(add) await adjustMoney(pid, add); await landOn(pid, true); }
+async function moveRel(pid, d){ const p=game.players[pid]; const cur=p.pos||0; const dest=((cur+d)%40+40)%40; await moveTo(pid, dest, d>0 && dest<cur); }
+async function goToJail(pid){ await update(child(roomRefs.players,pid), { pos:10, inJail:true, jailTurns:0 }); await update(roomRefs.events, { type:'card', payload:{ kind:'Jail', name:'Go To Jail', text:'Go directly to jail.' } }); }
+async function giveGOOJF(pid, deck){ const p=game.players[pid]; await update(child(roomRefs.players,pid), { goojf: (p.goojf||0)+1 }); }
+async function repairs(pid, perHouse, perHotel){ const counts=countHousesHotels(pid); const amt = counts.houses*perHouse + counts.hotels*perHotel; if(amt>0) await adjustMoney(pid,-amt); }
+async function birthday(pid, per){ for(const [otherId,o] of Object.entries(game.players)){ if(otherId===pid) continue; await adjustMoney(otherId,-per); await adjustMoney(pid, per); } }
+
+function countHousesHotels(pid){ const owners=game.board.owners||[]; const hs=game.board.houses||[]; let houses=0, hotels=0; for(let i=0;i<40;i++){ if(owners[i]===pid){ const n=hs[i]||0; if(n===5) hotels++; else houses+=n; } } return {houses,hotels}; }
+
+function nearest(from, arr){ for(let k=1;k<40;k++){ const i=(from+k)%40; if(arr.includes(i)) return i; } return from; }
+async function advanceToNearestStation(pid, doubleRent){ const p=game.players[pid]; const cur=p.pos||0; const dest=nearest(cur,[5,15,25,35]); const passed= dest<cur; await moveTo(pid,dest,passed); const owners=game.board.owners||[]; const owner=owners[dest]; if(owner!=null && owner!==pid){ const base=railroadRent(owner); const rent = doubleRent? base*2 : base; await pay(pid, owner, rent); } }
+async function advanceToNearestUtility(pid){ const p=game.players[pid]; const cur=p.pos||0; const dest=nearest(cur,[12,28]); const passed= dest<cur; await moveTo(pid,dest,passed); const owners=game.board.owners||[]; const owner=owners[dest]; if(owner!=null && owner!==pid){ const dice=r6()+r6(); const rent=10*dice; await pay(pid, owner, rent); await update(roomRefs.events,{type:'card', payload:{kind:'Chance', name:'Nearest Utility', text:`You rolled ${dice}. Pay £${rent}.`}}); } }
+
+async function deckDraw(kind){ const dRef = child(roomRefs.root, `decks/${kind}`); let drawn=null; const res = await runTransaction(dRef, (arr)=>{ if(!Array.isArray(arr) || arr.length===0) return arr; drawn=arr[0]; const rest=arr.slice(1); return [...rest, drawn]; }); if(!res || !res.committed) return null; return drawn; }
+
+// ==============================
+// Start game (host): init board + decks + turn
+// ==============================
+$('#btnStart').onclick = async ()=>{
+  if(!me.isHost) return;
+  const r=ref(db, `rooms/${me.room}`);
+  const playersSnap = await get(child(r,'players')); const players=playersSnap.val()||{}; const order = Object.keys(players); // join order
+  const owners = new Array(40).fill(null);
+  const mortgaged = new Array(40).fill(false);
+  const houses = new Array(40).fill(0);
+  const turn = { order, currentIndex:0, current: order[0], rolled:false, dice:[0,0], lastDiceSum:0, extraRoll:false };
+  const decks = { chance: shuffle(chanceCards.map((_,i)=>i)), chest: shuffle(chestCards.map((_,i)=>i)) };
+  await update(r, { meta:{ hostId:me.playerId, maxPlayers: Object.keys(players).length, state:'playing', startedAt: serverTimestamp() }, board:{ owners, mortgaged, houses }, turn, decks });
+};
+
+// ==============================
+// Rendering (board + tokens + markers)
+// ==============================
 function refreshSidebar(){ const list=$('#players'); if(!list) return; list.innerHTML=''; const order = game.turn?.order || Object.keys(game.players); order.forEach(pid=>{ const p=game.players[pid]; if(!p) return; const r1=document.createElement('div'); const r2=document.createElement('div'); r1.textContent=p.name; r2.textContent=`$${p.cash??1500}`; r2.className='money mono'; r1.style.display='flex'; r1.style.alignItems='center'; r1.style.gap='8px'; const dot=document.createElement('span'); dot.style.width='10px'; dot.style.height='10px'; dot.style.borderRadius='999px'; dot.style.display='inline-block'; dot.style.background=p.color; r1.prepend(dot); list.append(r1,r2); }); }
 
 function drawTokens(){ if(!game.players) return; const order = game.turn?.order || Object.keys(game.players); let idx=0; for(const pid of order){ const p=game.players[pid]; if(!p) continue; const r=tileRect(p.pos||0); const offs=[[-16,-16],[16,-16],[-16,16],[16,16]][idx%4]; const cx=r.x+r.w/2+offs[0], cy=r.y+r.h/2+offs[1]; ctx.beginPath(); ctx.arc(cx,cy,12,0,Math.PI*2); ctx.fillStyle=p.color; ctx.fill(); ctx.lineWidth=2; ctx.strokeStyle='rgba(0,0,0,.35)'; ctx.stroke(); ctx.font='10px ui-sans-serif'; ctx.textAlign='center'; ctx.textBaseline='top'; ctx.fillStyle='#111'; ctx.fillText(p.name.slice(0,4).toUpperCase(), cx, cy+12); idx++; }
 }
 
-function drawBoard(){ ctx.clearRect(0,0,SIZE,SIZE); drawBoardImage(); // highlight turn
-  if(game.turn){ const pid = game.turn.order[game.turn.currentIndex]; const p=game.players[pid]; if(p){ const r=tileRect(p.pos||0); ctx.save(); ctx.fillStyle='rgba(255,255,0,.12)'; rr(r.x+4,r.y+4,r.w-8,r.h-8,8); ctx.fill(); ctx.restore(); } }
-  // ownership markers / houses
-  const owners=game.board.owners||[]; const houses=game.board.houses||[];
-  for(let i=0;i<40;i++){ const r=tileRect(i); if(owners[i]){ const o=game.players[owners[i]]; if(o){ ctx.save(); // small house icon in owner colour
-      ctx.translate(r.x+r.w/2, r.y+12); ctx.fillStyle=o.color; ctx.beginPath(); ctx.moveTo(0,-8); ctx.lineTo(-10,0); ctx.lineTo(10,0); ctx.closePath(); ctx.fill(); ctx.fillRect(-9,0,18,10); ctx.restore(); }
-    }
-    const n=houses[i]||0; if(n>0){ const pad=4,size=10; if(i>0&&i<10){ const y=r.y+6; for(let k=0;k<(n===5?1:n);k++){ ctx.fillStyle=(n===5?'#d93a3a':'#1fb25a'); ctx.fillRect(r.x+8+k*(size+pad), y, size, size);} if(n===5){ ctx.fillRect(r.x+8, y, size*2+pad, size+3);} }
-      else if(i>20&&i<30){ const y=r.y+r.h-16; for(let k=0;k<(n===5?1:n);k++){ ctx.fillStyle=(n===5?'#d93a3a':'#1fb25a'); ctx.fillRect(r.x+8+k*(size+pad), y, size, size);} if(n===5){ ctx.fillRect(r.x+8, y, size*2+pad, size+3);} }
-      else if(i>10&&i<20){ const x=r.x+r.w-16; for(let k=0;k<(n===5?1:n);k++){ ctx.fillStyle=(n===5?'#d93a3a':'#1fb25a'); ctx.fillRect(x, r.y+8+k*(size+pad), size, size);} if(n===5){ ctx.fillRect(x, r.y+8, size+3, size*2+pad);} }
-      else if(i>30&&i<40){ const x=r.x+6; for(let k=0;k<(n===5?1:n);k++){ ctx.fillStyle=(n===5?'#d93a3a':'#1fb25a'); ctx.fillRect(x, r.y+8+k*(size+pad), size, size);} if(n===5){ ctx.fillRect(x, r.y+8, size+3, size*2+pad);} } }
-  }
-  drawTokens();
-}
+function drawBoard(){ ctx.clearRect(0,0,SIZE,SIZE); drawBoardImage(); if(game.turn){ const pid = game.turn.current || game.turn.order[game.turn.currentIndex]; const p=game.players[pid]; if(p){ const r=tileRect(p.pos||0); ctx.save(); ctx.fillStyle='rgba(255,255,0,.12)'; rr(r.x+4,r.y+4,r.w-8,r.h-8,8); ctx.fill(); ctx.restore(); } } const owners=game.board.owners||[]; const houses=game.board.houses||[]; for(let i=0;i<40;i++){ const r=tileRect(i); if(owners[i]){ const o=game.players[owners[i]]; if(o){ ctx.save(); ctx.translate(r.x+r.w/2, r.y+12); ctx.fillStyle=o.color; ctx.beginPath(); ctx.moveTo(0,-8); ctx.lineTo(-10,0); ctx.lineTo(10,0); ctx.closePath(); ctx.fill(); ctx.fillRect(-9,0,18,10); ctx.restore(); } } const n=houses[i]||0; if(n>0){ const pad=4,size=10; if(i>0&&i<10){ const y=r.y+6; for(let k=0;k<(n===5?1:n);k++){ ctx.fillStyle=(n===5?'#d93a3a':'#1fb25a'); ctx.fillRect(r.x+8+k*(size+pad), y, size, size);} if(n===5){ ctx.fillRect(r.x+8, y, size*2+pad, size+3);} } else if(i>20&&i<30){ const y=r.y+r.h-16; for(let k=0;k<(n===5?1:n);k++){ ctx.fillStyle=(n===5?'#d93a3a':'#1fb25a'); ctx.fillRect(r.x+8+k*(size+pad), y, size, size);} if(n===5){ ctx.fillRect(r.x+8, y, size*2+pad, size+3);} } else if(i>10&&i<20){ const x=r.x+r.w-16; for(let k=0;k<(n===5?1:n);k++){ ctx.fillStyle=(n===5?'#d93a3a':'#1fb25a'); ctx.fillRect(x, r.y+8+k*(size+pad), size, size);} if(n===5){ ctx.fillRect(x, r.y+8, size+3, size*2+pad);} } else if(i>30&&i<40){ const x=r.x+6; for(let k=0;k<(n===5?1:n);k++){ ctx.fillStyle=(n===5?'#d93a3a':'#1fb25a'); ctx.fillRect(x, r.y+8+k*(size+pad), size, size);} if(n===5){ ctx.fillRect(x, r.y+8, size+3, size*2+pad);} } } } drawTokens(); }
 
-// Dice helpers
-function r6(){ return (Math.random()*6|0)+1; }
+// ==============================
+// Turn UI + actions
+// ==============================
+function updateTurnUI(){ if(!game.turn) return; const pid = game.turn.current || game.turn.order[game.turn.currentIndex]; const p = game.players[pid]; $('#turnName').textContent = p? p.name : '-'; const isMyTurn = pid===me.playerId; $('#btnRoll').disabled = !isMyTurn || !!game.turn.rolled; $('#btnEnd').disabled  = !isMyTurn || !game.turn.rolled; $('#btnBuy').disabled  = true; $('#diceFace').textContent = `🎲 ${game.turn.dice?.[0]||0} + ${game.turn.dice?.[1]||0} = ${game.turn.lastDiceSum||0}`; }
 
-// Actions
-async function onRoll(){
-  if(!game.turn) return;
-  const rollRef = roomRefs.turn;
-  const d1 = (Math.random()*6|0)+1;
-  const d2 = (Math.random()*6|0)+1;
-  const res = await runTransaction(rollRef, (t)=>{
-    if(!t) return t;
-    const pid = t.current || t.order[t.currentIndex];
-    if(pid!==me.playerId) return t;   // not my turn
-    if(t.rolled) return t;            // already rolled
-    t.dice = [d1,d2];
-    t.lastDiceSum = d1+d2;
-    t.rolled = true;
-    return t;
-  });
-  if(!res || !res.committed) return;
-  const val = res.snapshot.val();
-  const pid = val.current || val.order[val.currentIndex];
-  await moveSteps(pid, val.lastDiceSum || 0);
-}
+async function onRoll(){ if(!game.turn) return; const rollRef = roomRefs.turn; const d1 = (Math.random()*6|0)+1; const d2 = (Math.random()*6|0)+1; const res = await runTransaction(rollRef, (t)=>{ if(!t) return t; const pid = t.current || t.order[t.currentIndex]; if(pid!==me.playerId) return t; if(t.rolled) return t; t.dice=[d1,d2]; t.lastDiceSum=d1+d2; t.rolled=true; return t; }); if(!res || !res.committed) return; const val=res.snapshot.val(); const pid2 = val.current || val.order[val.currentIndex]; await moveSteps(pid2, val.lastDiceSum||0); }
 
-async function moveSteps(pid, steps){ // animate one step at a time
-  const pos = (game.players[pid]?.pos||0); if(steps<=0) return landOn(pid);
-  const next=(pos+1)%40; await update(child(roomRefs.players,pid), { pos: next }); if(next===0){ // pass GO
-    const cash=(game.players[pid]?.cash||1500)+200; await update(child(roomRefs.players,pid), { cash }); log(`${game.players[pid]?.name||'Player'} passes GO and collects $200.`);
-  }
-  drawBoard(); setTimeout(()=>moveSteps(pid, steps-1), 220);
-}
+async function onEndTurn(){ if(!game.turn) return; await runTransaction(roomRefs.turn, (t)=>{ if(!t) return t; const pid=t.current || t.order[t.currentIndex]; if(pid!==me.playerId) return t; if(!t.rolled) return t; const next=(t.currentIndex+1)%t.order.length; t.currentIndex=next; t.current=t.order[next]; t.rolled=false; t.dice=[0,0]; t.lastDiceSum=0; return t; }); $('#btnBuy').disabled=true; }
+
+async function moveSteps(pid, steps){ const pos=(game.players[pid]?.pos||0); if(steps<=0) return landOn(pid); const next=(pos+1)%40; await update(child(roomRefs.players,pid), { pos: next }); if(next===0){ const cash=(game.players[pid]?.cash||1500)+200; await update(child(roomRefs.players,pid), { cash }); log(`${game.players[pid]?.name||'Player'} passes GO and collects $200.`); } drawBoard(); setTimeout(()=>moveSteps(pid, steps-1), 220); }
 
 function tileAt(i){ return tiles[i]; }
-function railroadRent(ownerId){ const owners=game.board.owners||[]; let c=0; for(const j of [5,15,25,35]) if(owners[j]===ownerId) c++; return [25,50,100,200][Math.max(0,c-1)]; }
+function railroadRent(ownerId){ const owners=game.board.owners||[]; let c=0; for(const j of [5,15,25,35]) if(owners[j]===ownerId) c++; return c? 25*Math.pow(2,c-1) : 0; }{ const owners=game.board.owners||[]; let c=0; for(const j of [5,15,25,35]) if(owners[j]===ownerId) c++; return [25,50,100,200][Math.max(0,c-1)]; }
 function utilityMult(ownerId){ const owners=game.board.owners||[]; let c=0; for(const j of [12,28]) if(owners[j]===ownerId) c++; return c>=2?10:4; }
 function ownsFullSet(pid, group){ const owners=game.board.owners||[]; const mem=groupMembers[group]||[]; return mem.length && mem.every(i=>owners[i]===pid); }
 
-async function landOn(pid){
-  const p=game.players[pid]; const t=tileAt(p.pos);
-  if(!t) return;
-  if(t.type==='property'){
-    const ownersArr=game.board.owners||[]; const owner=ownersArr[t.i];
-    if(owner==null){
-      if(pid===me.playerId) $('#btnBuy').disabled=false;
-      log(`${p.name} may buy <b>${t.name}</b> for $${t.price}.`);
-    } else if(owner!==pid){
-      const rent = calcRent(t.i); const to=game.players[owner];
-      await pay(pid, owner, rent);
-      log(`${p.name} pays $${rent} to ${to.name} for ${t.name}.`);
-    }
-  }
+async function landOn(pid, fromCard=false){ const p=game.players[pid]; const t=tileAt(p.pos); if(!t) return; if(t.type===T.PROPERTY || t.type===T.RAILROAD || t.type===T.UTILITY){ const ownersArr=game.board.owners||[]; const owner=ownersArr[t.i]; if(owner==null){ if(pid===me.playerId) $('#btnBuy').disabled=false; log(`${p.name} may buy <b>${t.name}</b> for $${t.price}.`); } else if(owner!==pid){ let rent=0; if(t.type===T.PROPERTY) rent=calcRent(t.i); else if(t.type===T.RAILROAD) rent=railroadRent(owner); else if(t.type===T.UTILITY) rent=utilityMult(owner)*(game.turn?.lastDiceSum||0); await pay(pid, owner, rent); log(`${p.name} pays $${rent} to ${game.players[owner].name} for ${t.name}.`); } }
+  else if(t.type===T.CHANCE){ await doChance(pid); }
+  else if(t.type===T.CHEST){ await doChest(pid); }
+  else if(t.type===T.GOTOJAIL){ await goToJail(pid); }
 }
 
 function calcRent(idx){ const owners=game.board.owners||[]; const t=tiles[idx]; if(t.type===T.PROPERTY){ const houses=(game.board.houses||[])[idx]||0; if(houses>0) return t.rent[houses]; let base=t.rent[0]; if(ownsFullSet(owners[idx], t.group)) base*=2; return base; } if(t.type===T.RAILROAD){ return railroadRent(owners[idx]); } if(t.type===T.UTILITY){ return utilityMult(owners[idx]) * (game.turn?.lastDiceSum||0); } return 0; }
 
 async function pay(fromPid, toPid, amt){ const from=game.players[fromPid]; const to=game.players[toPid]; const fCash=(from.cash||0)-amt; const tCash=(to.cash||0)+amt; await update(child(roomRefs.players, fromPid), { cash: Math.max(0,fCash) }); await update(child(roomRefs.players, toPid), { cash: tCash }); }
 
-async function onBuy(){ const pid=me.playerId; const p=game.players[pid]; const t=tiles[p.pos]; const ownersArr=game.board.owners||[]; if(ownersArr[t.i]!=null) return; if(p.cash < t.price) { log(`<b>Not enough cash</b> to buy ${t.name}.`); return; }
-  ownersArr[t.i]=pid; await update(roomRefs.board, { owners: ownersArr }); await update(child(roomRefs.players,pid), { cash: p.cash - t.price }); // broadcast card to all
-  await update(roomRefs.events, { type:'card', payload:{ kind:'deed', name:t.name, text:`Bought for $${t.price}` } }); }
+async function onBuy(){
+  const pid=me.playerId; if(!pid) return;
+  const p=game.players[pid]; if(!p) return;
+  const t=tiles[p.pos];
+  const ownersArr=game.board.owners||[];
+  if(ownersArr[t.i]!=null) return;
+  const price=t.price||0;
+  if((p.cash||0) < price) { log(`<b>Not enough cash</b> to buy ${t.name}.`); return; }
+  ownersArr[t.i]=pid;
+  await update(roomRefs.board, { owners: ownersArr });
+  await update(child(roomRefs.players,pid), { cash: (p.cash||0) - price });
+  log(`<b>${p.name}</b> bought <b>${t.name}</b> for £${price}.`);
+  // Show full deed card to everyone
+  await update(roomRefs.events, { type:'card', payload:{ kind:'deed', name:t.name, html: deedHTML(t) } });
+}{ const pid=me.playerId; const p=game.players[pid]; const t=tiles[p.pos]; const ownersArr=game.board.owners||[]; if(ownersArr[t.i]!=null) return; if(p.cash < t.price) { log(`<b>Not enough cash</b> to buy ${t.name}.`); return; } ownersArr[t.i]=pid; await update(roomRefs.board, { owners: ownersArr }); await update(child(roomRefs.players,pid), { cash: p.cash - t.price }); await update(roomRefs.events, { type:'card', payload:{ kind:'deed', name:t.name, html: deedHTML(t) } }); }
 
-async function onEndTurn(){
-  if(!game.turn) return;
-  await runTransaction(roomRefs.turn, (t)=>{
-    if(!t) return t;
-    const pid = t.current || t.order[t.currentIndex];
-    if(pid!==me.playerId) return t; // not my turn
-    if(!t.rolled) return t;         // must roll first
-    const next = (t.currentIndex+1)%t.order.length;
-    t.currentIndex = next;
-    t.current = t.order[next];
-    t.rolled = false;
-    t.dice = [0,0];
-    t.lastDiceSum = 0;
-    return t;
-  });
-  document.getElementById('btnBuy').disabled = true;
-}
+// ==============================
+// Chance / Chest — draw & apply
+// ==============================
+async function doChance(pid){
+  const idx = await deckDraw('chance'); if(idx==null) return;
+  const card = chanceCards[idx];
+  log(`<b>Chance:</b> ${card.text}`);
+  await update(roomRefs.events, { type:'card', payload:{ kind:'Chance', name:'Chance', text: card.text } });
+  await card.act(pid);
+}{ const idx = await deckDraw('chance'); if(idx==null) return; const card = chanceCards[idx]; await update(roomRefs.events, { type:'card', payload:{ kind:'Chance', name:'Chance', text: card.text } }); await card.act(pid); }
+async function doChest(pid){
+  const idx = await deckDraw('chest'); if(idx==null) return;
+  const card = chestCards[idx];
+  log(`<b>Community Chest:</b> ${card.text}`);
+  await update(roomRefs.events, { type:'card', payload:{ kind:'Chest', name:'Community Chest', text: card.text } });
+  await card.act(pid);
+}{ const idx = await deckDraw('chest'); if(idx==null) return; const card = chestCards[idx]; await update(roomRefs.events, { type:'card', payload:{ kind:'Chest', name:'Community Chest', text: card.text } }); await card.act(pid); }
 
+// ==============================
 // Card visuals
-function showCard({kind,name,text}){ const head=$('#cardHead'), body=$('#cardBody'); head.textContent = name || kind; head.style.background = kind==='Chance'? '#ff9b55' : (kind==='Chest'? '#6bd4de' : '#ffd166'); $('#card').style.display='flex'; body.innerHTML = text || ''; }
+// ==============================
+function deedHTML(t){ if(t.type===T.PROPERTY){ return `<div style="text-align:left;color:#111">
+  <div style="font-weight:800;text-align:center">${t.name}</div>
+  <div class="mono" style="display:grid;grid-template-columns:1fr auto;gap:6px;margin-top:8px">
+    <span>Rent (site only)</span><span>£${t.rent[0]}</span>
+    <span>With 1 House</span><span>£${t.rent[1]}</span>
+    <span>With 2 Houses</span><span>£${t.rent[2]}</span>
+    <span>With 3 Houses</span><span>£${t.rent[3]}</span>
+    <span>With 4 Houses</span><span>£${t.rent[4]}</span>
+    <span>With HOTEL</span><span>£${t.rent[5]}</span>
+  </div>
+  <div style="margin-top:8px;font-size:13px">Houses cost £${t.houseCost} each • Mortgage £${t.price/2}</div>
+</div>`; } if(t.type===T.RAILROAD){ return `<div style="text-align:left;color:#111">
+  <div style="font-weight:800;text-align:center">${t.name}</div>
+  <div class="mono" style="display:grid;grid-template-columns:1fr auto;gap:6px;margin-top:8px">
+    <span>Rent</span><span>£25</span>
+    <span>If 2 Stations owned</span><span>£50</span>
+    <span>If 3 Stations owned</span><span>£100</span>
+    <span>If 4 Stations owned</span><span>£200</span>
+  </div>
+  <div style="margin-top:8px;font-size:13px">Price £200 • Mortgage £100</div>
+</div>`; } if(t.type===T.UTILITY){ return `<div style="text-align:left;color:#111">
+  <div style="font-weight:800;text-align:center">${t.name}</div>
+  <div class="mono" style="display:grid;grid-template-columns:1fr auto;gap:6px;margin-top:8px">
+    <span>Rent (if one Utility owned)</span><span>4× dice</span>
+    <span>Rent (if both Utilities owned)</span><span>10× dice</span>
+  </div>
+  <div style="margin-top:8px;font-size:13px">Price £150 • Mortgage £75</div>
+</div>`; } return `<div>${t.name}</div>`; }
 
+function showCard({kind,name,text,html}){ const head=$('#cardHead'), body=$('#cardBody'); head.textContent = name || kind; head.style.background = kind==='Chance'? '#ff9b55' : (kind==='Chest'? '#6bd4de' : '#ffd166'); $('#card').style.display='flex'; body.innerHTML = html || (text || ''); }
+$('#cardOk').onclick = ()=>{ document.getElementById('card').style.display='none'; if(roomRefs?.events && me?.isHost){ update(roomRefs.events, { type:null, payload:null }); } };
 
 // Click to open deed
-canvas.addEventListener('click', (ev)=>{ const rect=canvas.getBoundingClientRect(); const x=(ev.clientX-rect.left)*canvas.width/rect.width; const y=(ev.clientY-rect.top)*canvas.height/rect.height; for(let i=0;i<40;i++){ const r=tileRect(i); if(x>=r.x&&x<=r.x+r.w&&y>=r.y&&y<=r.y+r.h){ const t=tiles[i]; if([T.PROPERTY,T.RAILROAD,T.UTILITY].includes(t.type)){ showCard({kind:'deed', name:t.name, text:`Price: $${t.price||0}`}); } break; } } });
+canvas.addEventListener('click', (ev)=>{
+  const rect=canvas.getBoundingClientRect();
+  const x=(ev.clientX-rect.left)*canvas.width/rect.width; const y=(ev.clientY-rect.top)*canvas.height/rect.height;
+  for(let i=0;i<40;i++){
+    const r=tileRect(i);
+    if(x>=r.x&&x<=r.x+r.w&&y>=r.y&&y<=r.y+r.h){
+      const t=tiles[i];
+      if([T.PROPERTY,T.RAILROAD,T.UTILITY].includes(t.type)){
+        showCard({kind:'deed', name:t.name, html:deedHTML(t)});
+      } else if(t.type===T.CHANCE){
+        showCard({kind:'Chance', name:'Chance', text:'Draw a Chance card by landing on it.'});
+      } else if(t.type===T.CHEST){
+        showCard({kind:'Chest', name:'Community Chest', text:'Draw a Community Chest card by landing on it.'});
+      }
+      break;
+    }
+  }
+}); const x=(ev.clientX-rect.left)*canvas.width/rect.width; const y=(ev.clientY-rect.top)*canvas.height/rect.height; for(let i=0;i<40;i++){ const r=tileRect(i); if(x>=r.x&&x<=r.x+r.w&&y>=r.y&&y<=r.y+r.h){ const t=tiles[i]; if([T.PROPERTY,T.RAILROAD,T.UTILITY].includes(t.type)){ showCard({kind:'deed', name:t.name, html:deedHTML(t)}); } break; } } });
 
 // ==============================
 // Minimal self‑tests (don’t affect gameplay)
