@@ -352,8 +352,7 @@ function updateTurnUI(){
   document.getElementById('btnRoll').disabled = !isMyTurn || !!game.turn.rolled;
   document.getElementById('btnEnd').disabled  = !isMyTurn || !game.turn.rolled; // must roll once
   document.getElementById('btnBuy').disabled  = true;
-  document.getElementById('diceFace').textContent = `🎲 ${game.turn.dice?.[0]||0} + ${game.turn.dice?.[1]||0} = ${game.turn.lastDiceSum||0}`;
-} + ${game.turn.dice?.[1]||0} = ${game.turn.lastDiceSum||0}`; }
+  document.getElementById('diceFace').textContent = `🎲 ${game.turn.dice?.[0]||0}  + ${game.turn.dice?.[1]||0} = ${game.turn.lastDiceSum||0}`; }
 
 function refreshSidebar(){ const list=$('#players'); if(!list) return; list.innerHTML=''; const order = game.turn?.order || Object.keys(game.players); order.forEach(pid=>{ const p=game.players[pid]; if(!p) return; const r1=document.createElement('div'); const r2=document.createElement('div'); r1.textContent=p.name; r2.textContent=`$${p.cash??1500}`; r2.className='money mono'; r1.style.display='flex'; r1.style.alignItems='center'; r1.style.gap='8px'; const dot=document.createElement('span'); dot.style.width='10px'; dot.style.height='10px'; dot.style.borderRadius='999px'; dot.style.display='inline-block'; dot.style.background=p.color; r1.prepend(dot); list.append(r1,r2); }); }
 
@@ -381,25 +380,24 @@ function r6(){ return (Math.random()*6|0)+1; }
 // Actions
 async function onRoll(){
   if(!game.turn) return;
-  // server-authoritative: one roll per turn and only current player
   const rollRef = roomRefs.turn;
-  await runTransaction(rollRef, (t)=>{
+  const d1 = (Math.random()*6|0)+1;
+  const d2 = (Math.random()*6|0)+1;
+  const res = await runTransaction(rollRef, (t)=>{
     if(!t) return t;
     const pid = t.current || t.order[t.currentIndex];
-    if(pid!==me.playerId) return; // not my turn
-    if(t.rolled) return; // already rolled
-    const d1 = (Math.random()*6|0)+1;
-    const d2 = (Math.random()*6|0)+1;
+    if(pid!==me.playerId) return t;   // not my turn
+    if(t.rolled) return t;            // already rolled
     t.dice = [d1,d2];
     t.lastDiceSum = d1+d2;
     t.rolled = true;
     return t;
   });
-  // after transaction, start local animation from latest state
-  const pid = (game.turn.current || game.turn.order[game.turn.currentIndex]);
-  const steps = (game.turn.lastDiceSum)||0;
-  await moveSteps(pid, steps);
-}); await moveSteps(pid, sum); }
+  if(!res || !res.committed) return;
+  const val = res.snapshot.val();
+  const pid = val.current || val.order[val.currentIndex];
+  await moveSteps(pid, val.lastDiceSum || 0);
+}
 
 async function moveSteps(pid, steps){ // animate one step at a time
   const pos = (game.players[pid]?.pos||0); if(steps<=0) return landOn(pid);
@@ -440,12 +438,11 @@ async function onBuy(){ const pid=me.playerId; const p=game.players[pid]; const 
 
 async function onEndTurn(){
   if(!game.turn) return;
-  // server-authoritative turn advance; only current player may advance and only after rolling
   await runTransaction(roomRefs.turn, (t)=>{
     if(!t) return t;
     const pid = t.current || t.order[t.currentIndex];
     if(pid!==me.playerId) return t; // not my turn
-    if(!t.rolled) return t; // must roll first
+    if(!t.rolled) return t;         // must roll first
     const next = (t.currentIndex+1)%t.order.length;
     t.currentIndex = next;
     t.current = t.order[next];
@@ -454,8 +451,8 @@ async function onEndTurn(){
     t.lastDiceSum = 0;
     return t;
   });
-  document.getElementById('btnBuy').disabled=true;
-}); $('#btnBuy').disabled=true; }
+  document.getElementById('btnBuy').disabled = true;
+}
 
 // Card visuals
 function showCard({kind,name,text}){ const head=$('#cardHead'), body=$('#cardBody'); head.textContent = name || kind; head.style.background = kind==='Chance'? '#ff9b55' : (kind==='Chest'? '#6bd4de' : '#ffd166'); $('#card').style.display='flex'; body.innerHTML = text || ''; }
