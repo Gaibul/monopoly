@@ -29,7 +29,7 @@
   .roomCode{font-size:22px;font-weight:800;letter-spacing:3px}
 
   /* Game */
-  #screenGame{display:none;height:100vh}
+  #screenGame{display:grid;height:100vh}
   #wrap{display:grid;grid-template-columns:minmax(760px,1fr) 380px; gap:16px; height:100%}
   #game{width:100%;height:100%;display:block;}
   #ui{display:flex;flex-direction:column;gap:12px;padding:12px;background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));border-left:1px solid var(--panelBorder)}
@@ -104,7 +104,7 @@
 </section>
 
 <!-- ===== GAME ===== -->
-<section id="screenGame">
+<section id="screenGame" class="hidden">
   <div id="wrap">
     <canvas id="game" width="1100" height="1100"></canvas>
     <div id="ui">
