@@ -448,7 +448,7 @@ async function onBuy(){
   await update(child(roomRefs.players,pid), { cash: (p.cash||0) - price });
   log(`<b>${p.name}</b> bought <b>${t.name}</b> for £${price}.`);
   await update(roomRefs.events, { type:'card', payload:{ kind:'deed', name:t.name, html: deedHTML(t) } });
-}.`); return; } ownersArr[t.i]=pid; await update(roomRefs.board, { owners: ownersArr }); await update(child(roomRefs.players,pid), { cash: p.cash - t.price }); await update(roomRefs.events, { type:'card', payload:{ kind:'deed', name:t.name, html: deedHTML(t) } }); }
+}
 
 // ==============================
 // Chance / Chest — draw & apply
@@ -457,23 +457,7 @@ async function doChance(pid){
   const idx = await deckDraw('chance'); if(idx==null) return;
   const card = chanceCards[idx];
   log(`<b>Chance:</b> ${card.text}`);
-  await update(roomRefs.events, { type:'card', payload:{ kind:'Chance', name:'Chance', text: card.text } });
-  await card.act(pid);
-} }); await card.act(pid); }
-async function doChest(pid){
-  const idx = await deckDraw('chest'); if(idx==null) return;
-  const card = chestCards[idx];
-  log(`<b>Community Chest:</b> ${card.text}`);
-  await update(roomRefs.events, { type:'card', payload:{ kind:'Chest', name:'Community Chest', text: card.text } });
-  await card.act(pid);
-} }); await card.act(pid); }
-
-// ==============================
-// Card visuals
-// ==============================
-function deedHTML(t){ if(t.type===T.PROPERTY){ return `<div style="text-align:left;color:#111">
-  <div style="font-weight:800;text-align:center">${t.name}</div>
-  <div class="mono" style="display:grid;grid-template-columns:1fr auto;gap:6px;margin-top:8px">
+ o;gap:6px;margin-top:8px">
     <span>Rent (site only)</span><span>£${t.rent[0]}</span>
     <span>With 1 House</span><span>£${t.rent[1]}</span>
     <span>With 2 Houses</span><span>£${t.rent[2]}</span>
@@ -533,10 +517,20 @@ canvas.addEventListener('click', (ev)=>{
 }); const x=(ev.clientX-rect.left)*canvas.width/rect.width; const y=(ev.clientY-rect.top)*canvas.height/rect.height; for(let i=0;i<40;i++){ const r=tileRect(i); if(x>=r.x&&x<=r.x+r.w&&y>=r.y&&y<=r.y+r.h){ const t=tiles[i]; if([T.PROPERTY,T.RAILROAD,T.UTILITY].includes(t.type)){ showCard({kind:'deed', name:t.name, html:deedHTML(t)}); } break; } } });
 
 // ==============================
-// Minimal self‑tests (don’t affect gameplay)
+// Minimal self-tests (don’t affect gameplay)
 // ==============================
-(function(){ try{ console.assert(tiles.length===40, 'There should be 40 tiles'); [0,1,10,20,30,39].forEach(i=>{ const r=tileRect(i); console.assert(r && 'x' in r && 'w' in r, 'tileRect ok '+i); }); } catch(e){ console.warn('Self‑tests failed', e); } })();
-
+(function(){
+  try {
+    console.assert(tiles.length === 40, 'There should be 40 tiles');
+    [0, 1, 10, 20, 30, 39].forEach(i => {
+      const r = tileRect(i);
+      console.assert(r && 'x' in r && 'w' in r, 'tileRect ok ' + i);
+    });
+  } catch (e) {
+    console.warn('Self-tests failed', e);
+  }
+})();
 </script>
 </body>
 </html>
+
