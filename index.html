@@ -333,9 +333,16 @@ async function startGameUI(room){ // switch screens
   $('#btnRoll').onclick = onRoll;
   $('#btnEnd').onclick = onEndTurn;
   $('#btnBuy').onclick = onBuy;
-  $('#cardOk').onclick = ()=> update(roomRefs.events, { type:null, payload:null });
+  $('#cardOk').onclick = closeCard;
 
   drawBoard();
+}
+
+function closeCard(){
+  // Hide locally
+  document.getElementById('card').style.display = 'none';
+  // Host clears shared event so all clients stop seeing the modal
+  if(roomRefs?.events && me?.isHost){ update(roomRefs.events, { type:null, payload:null }); }
 }
 
 function updateTurnUI(){ if(!game.turn) return; const pid = game.turn.order[game.turn.currentIndex]; const p = game.players[pid]; $('#turnName').textContent = p? p.name : '-'; const isMyTurn = pid===me.playerId; $('#btnRoll').disabled = !isMyTurn; $('#btnEnd').disabled = !isMyTurn; $('#btnBuy').disabled = true; $('#diceFace').textContent = `🎲 ${game.turn.dice?.[0]||0} + ${game.turn.dice?.[1]||0} = ${game.turn.lastDiceSum||0}`; }
@@ -407,7 +414,7 @@ async function onEndTurn(){ if(!game.turn) return; const pid = game.turn.order[g
 
 // Card visuals
 function showCard({kind,name,text}){ const head=$('#cardHead'), body=$('#cardBody'); head.textContent = name || kind; head.style.background = kind==='Chance'? '#ff9b55' : (kind==='Chest'? '#6bd4de' : '#ffd166'); $('#card').style.display='flex'; body.innerHTML = text || ''; }
-$('#cardOk').onclick = ()=> $('#card').style.display='none';
+
 
 // Click to open deed
 canvas.addEventListener('click', (ev)=>{ const rect=canvas.getBoundingClientRect(); const x=(ev.clientX-rect.left)*canvas.width/rect.width; const y=(ev.clientY-rect.top)*canvas.height/rect.height; for(let i=0;i<40;i++){ const r=tileRect(i); if(x>=r.x&&x<=r.x+r.w&&y>=r.y&&y<=r.y+r.h){ const t=tiles[i]; if([T.PROPERTY,T.RAILROAD,T.UTILITY].includes(t.type)){ showCard({kind:'deed', name:t.name, text:`Price: $${t.price||0}`}); } break; } } });
