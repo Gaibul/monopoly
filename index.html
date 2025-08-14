@@ -151,7 +151,7 @@
 // Firebase setup
 // ==============================
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-app.js";
-import { getDatabase, ref, set, get, update, onValue, serverTimestamp, child } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-database.js";
+import { getDatabase, ref, set, get, update, onValue, serverTimestamp, child, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-database.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAEqutXCO5OZD6VU_ohaBxNfh7G8Q6PEy0",
@@ -248,7 +248,7 @@ $('#btnStart').onclick = async ()=>{
   const owners = new Array(40).fill(null);
   const mortgaged = new Array(40).fill(false);
   const houses = new Array(40).fill(0);
-  const turn = { order, currentIndex:0, dice:[0,0], lastDiceSum:0, extraRoll:false };
+  const turn = { order, currentIndex:0, current: order[0], rolled:false, dice:[0,0], lastDiceSum:0, extraRoll:false };
   await update(r, { meta:{ hostId:me.playerId, maxPlayers: Object.keys(players).length, state:'playing', startedAt: serverTimestamp() }, board:{ owners, mortgaged, houses }, turn });
 };
 
@@ -343,7 +343,17 @@ function closeCard(){
   if(roomRefs?.events && me?.isHost){ update(roomRefs.events, { type:null, payload:null }); }
 }
 
-function updateTurnUI(){ if(!game.turn) return; const pid = game.turn.order[game.turn.currentIndex]; const p = game.players[pid]; $('#turnName').textContent = p? p.name : '-'; const isMyTurn = pid===me.playerId; $('#btnRoll').disabled = !isMyTurn; $('#btnEnd').disabled = !isMyTurn; $('#btnBuy').disabled = true; $('#diceFace').textContent = `🎲 ${game.turn.dice?.[0]||0} + ${game.turn.dice?.[1]||0} = ${game.turn.lastDiceSum||0}`; }
+function updateTurnUI(){
+  if(!game.turn) return;
+  const pid = game.turn.current || game.turn.order[game.turn.currentIndex];
+  const p = game.players[pid];
+  document.getElementById('turnName').textContent = p? p.name : '-';
+  const isMyTurn = pid===me.playerId;
+  document.getElementById('btnRoll').disabled = !isMyTurn || !!game.turn.rolled;
+  document.getElementById('btnEnd').disabled  = !isMyTurn || !game.turn.rolled; // must roll once
+  document.getElementById('btnBuy').disabled  = true;
+  document.getElementById('diceFace').textContent = `🎲 ${game.turn.dice?.[0]||0} + ${game.turn.dice?.[1]||0} = ${game.turn.lastDiceSum||0}`;
+} + ${game.turn.dice?.[1]||0} = ${game.turn.lastDiceSum||0}`; }
 
 function refreshSidebar(){ const list=$('#players'); if(!list) return; list.innerHTML=''; const order = game.turn?.order || Object.keys(game.players); order.forEach(pid=>{ const p=game.players[pid]; if(!p) return; const r1=document.createElement('div'); const r2=document.createElement('div'); r1.textContent=p.name; r2.textContent=`$${p.cash??1500}`; r2.className='money mono'; r1.style.display='flex'; r1.style.alignItems='center'; r1.style.gap='8px'; const dot=document.createElement('span'); dot.style.width='10px'; dot.style.height='10px'; dot.style.borderRadius='999px'; dot.style.display='inline-block'; dot.style.background=p.color; r1.prepend(dot); list.append(r1,r2); }); }
 
@@ -369,7 +379,27 @@ function drawBoard(){ ctx.clearRect(0,0,SIZE,SIZE); drawBoardImage(); // highlig
 function r6(){ return (Math.random()*6|0)+1; }
 
 // Actions
-async function onRoll(){ if(!game.turn) return; const pid = game.turn.order[game.turn.currentIndex]; if(pid!==me.playerId) return; const d1=r6(), d2=r6(); const sum=d1+d2; await update(roomRefs.turn, { dice:[d1,d2], lastDiceSum:sum }); await moveSteps(pid, sum); }
+async function onRoll(){
+  if(!game.turn) return;
+  // server-authoritative: one roll per turn and only current player
+  const rollRef = roomRefs.turn;
+  await runTransaction(rollRef, (t)=>{
+    if(!t) return t;
+    const pid = t.current || t.order[t.currentIndex];
+    if(pid!==me.playerId) return; // not my turn
+    if(t.rolled) return; // already rolled
+    const d1 = (Math.random()*6|0)+1;
+    const d2 = (Math.random()*6|0)+1;
+    t.dice = [d1,d2];
+    t.lastDiceSum = d1+d2;
+    t.rolled = true;
+    return t;
+  });
+  // after transaction, start local animation from latest state
+  const pid = (game.turn.current || game.turn.order[game.turn.currentIndex]);
+  const steps = (game.turn.lastDiceSum)||0;
+  await moveSteps(pid, steps);
+}); await moveSteps(pid, sum); }
 
 async function moveSteps(pid, steps){ // animate one step at a time
   const pos = (game.players[pid]?.pos||0); if(steps<=0) return landOn(pid);
@@ -408,7 +438,24 @@ async function onBuy(){ const pid=me.playerId; const p=game.players[pid]; const 
   ownersArr[t.i]=pid; await update(roomRefs.board, { owners: ownersArr }); await update(child(roomRefs.players,pid), { cash: p.cash - t.price }); // broadcast card to all
   await update(roomRefs.events, { type:'card', payload:{ kind:'deed', name:t.name, text:`Bought for $${t.price}` } }); }
 
-async function onEndTurn(){ if(!game.turn) return; const pid = game.turn.order[game.turn.currentIndex]; if(pid!==me.playerId) return; const next=(game.turn.currentIndex+1)%game.turn.order.length; await update(roomRefs.turn, { currentIndex: next, dice:[0,0], lastDiceSum:0 }); $('#btnBuy').disabled=true; }
+async function onEndTurn(){
+  if(!game.turn) return;
+  // server-authoritative turn advance; only current player may advance and only after rolling
+  await runTransaction(roomRefs.turn, (t)=>{
+    if(!t) return t;
+    const pid = t.current || t.order[t.currentIndex];
+    if(pid!==me.playerId) return t; // not my turn
+    if(!t.rolled) return t; // must roll first
+    const next = (t.currentIndex+1)%t.order.length;
+    t.currentIndex = next;
+    t.current = t.order[next];
+    t.rolled = false;
+    t.dice = [0,0];
+    t.lastDiceSum = 0;
+    return t;
+  });
+  document.getElementById('btnBuy').disabled=true;
+}); $('#btnBuy').disabled=true; }
 
 // Card visuals
 function showCard({kind,name,text}){ const head=$('#cardHead'), body=$('#cardBody'); head.textContent = name || kind; head.style.background = kind==='Chance'? '#ff9b55' : (kind==='Chest'? '#6bd4de' : '#ffd166'); $('#card').style.display='flex'; body.innerHTML = text || ''; }
