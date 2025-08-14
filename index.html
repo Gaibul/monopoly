@@ -194,9 +194,9 @@ renderColorGrid($('#joinColors'));
 // Generate a 4‑letter room code
 function roomCode(){ const A='ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; let s=''; for(let i=0;i<4;i++) s+=A[Math.random()*A.length|0]; return s; }
 
-// Persist identity for rejoin
-function remember(){ localStorage.setItem('mono.me', JSON.stringify(me)); }
-function recall(){ try{ const v = JSON.parse(localStorage.getItem('mono.me')||'null'); if(v&&v.room&&v.playerId) return v; }catch{} return null; }
+// Persist identity for rejoin — DISABLED per user request
+function remember(){ /* persistence disabled */ }
+function recall(){ return null; }catch{} return null; }
 
 // Observe players in lobby
 let currentRoomRef=null; let playersUnsub=null; let lobbyStateUnsub=null;
@@ -237,9 +237,7 @@ $('#btnJoin').onclick = async ()=>{
   await bindLobby(code);
 };
 
-// Rejoin
-const remembered = recall();
-if(remembered){ me=remembered; statusEl.textContent = `room ${me.room}`; bindLobby(me.room); }
+// Rejoin disabled — always start fresh in this tab
 
 // Host starts game
 $('#btnStart').onclick = async ()=>{
